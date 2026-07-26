@@ -8,7 +8,6 @@ from aiogram.filters import Command
 from aiogram.types import InputMediaPhoto, InlineKeyboardButton, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from PIL import Image, ImageDraw
-from aiohttp import web
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,7 +20,7 @@ dp = Dispatcher()
 status_messages = {}  # {chat_id: message_id}
 current_status = {}   # {chat_id: color}
 boy_chat_id = None
-girl_chat_id = None   # <-- НОВОЕ: запоминаем ID девушки
+girl_chat_id = None   # Запоминаем ID девушки
 chat_locks = {}       # Блокировки от двойных нажатий
 
 COLORS = {
@@ -85,7 +84,6 @@ def get_keyboard():
         ]
     ).as_markup()
 
-# Кнопка запроса статуса для парня
 def get_boy_keyboard():
     return InlineKeyboardBuilder(
         [
@@ -99,9 +97,6 @@ async def get_lock(chat_id: int):
     return chat_locks[chat_id]
 
 async def update_girl_photo(chat_id: int, color: str) -> bool:
-    """
-    Возвращает True, только если статус РЕАЛЬНО изменился.
-    """
     lock = await get_lock(chat_id)
     
     async with lock:
@@ -174,7 +169,6 @@ async def ask_command(message: types.Message):
     await request_status_from_girl(message)
 
 async def request_status_from_girl(event: types.Message | types.CallbackQuery):
-    """Отправляет запрос девушке обновить статус"""
     global girl_chat_id
     
     if not girl_chat_id:
@@ -186,13 +180,11 @@ async def request_status_from_girl(event: types.Message | types.CallbackQuery):
         return
 
     try:
-        # Отправляем уведомление девушке
         await bot.send_message(
             chat_id=girl_chat_id, 
             text="🔔 **Он спрашивает, какое у тебя настроение!**\nВыбери текущий статус выше 👆"
         )
         
-        # Подтверждение парню
         text_ok = "📩 Запрос отправлен! Ждём ответа..."
         if isinstance(event, types.CallbackQuery):
             await event.answer("Запрос отправлен!")
@@ -213,7 +205,7 @@ async def request_status_from_girl(event: types.Message | types.CallbackQuery):
 @dp.message(Command("start"))
 async def start_girl(message: types.Message):
     global girl_chat_id
-    girl_chat_id = message.chat.id  # Сохраняем ID девушки
+    girl_chat_id = message.chat.id
     await update_girl_photo(message.chat.id, "green")
     logger.info(f"🎬 Девушка запустила бота: {message.chat.id}")
 
@@ -238,28 +230,9 @@ async def on_color_change(callback: types.CallbackQuery):
 async def ping(message: types.Message):
     await message.answer("🏓 Понг! Бот работает.")
 
-# ==========================================
-# ФИКС ДЛЯ RENDER: Фиктивный веб-сервер
-# ==========================================
-async def handle_health(request):
-    return web.Response(text="Bot is running 🟢")
-
-async def init_web_app():
-    app = web.Application()
-    app.router.add_get('/', handle_health)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    logger.info(f"✅ Веб-сервер запущен на порту {port} (Render happy)")
-
 async def main():
     logger.info("🚀 Запуск бота 'Светофор'...")
-    await asyncio.gather(
-        init_web_app(),
-        dp.start_polling(bot)
-    )
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
