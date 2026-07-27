@@ -17,11 +17,12 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # Хранилище состояний
-status_messages = {}  # {chat_id: message_id}
-current_status = {}   # {chat_id: color}
+status_messages = {}   # {chat_id: message_id} — для фото с кнопками
+sticker_messages = {}  # {chat_id: message_id} — NEW: для стикеров (чтобы удалять)
+current_status = {}    # {chat_id: color}
 boy_chat_id = None
-girl_chat_id = None   # Запоминаем ID девушки
-chat_locks = {}       # Блокировки от двойных нажатий
+girl_chat_id = None    # Запоминаем ID девушки
+chat_locks = {}        # Блокировки от двойных нажатий
 
 COLORS = {
     "green": (0, 200, 0),
@@ -44,7 +45,7 @@ STICKERS = {
     "red": "CAACAgIAAxkBAAERnMVqZyWolmr7j5Y01teSGFx7knW-IQADFQACrAGQS5_oTC2UZF6iPQQ"     
 }
 
-# Язвительные фразы-уведомления для девушки, когда парень запрашивает статус
+# Язвительные фразы-уведомления для девушки
 ASK_MESSAGES = [
     "🔔 *ЗАйка милашка!* Не моглабы выбрать статус👇",
     "😏 *Твой хочет контакта, хочет кнш полового!* но не получится, поэтому выбери статус для разговора👇",
@@ -112,13 +113,26 @@ async def get_lock(chat_id: int):
         chat_locks[chat_id] = asyncio.Lock()
     return chat_locks[chat_id]
 
+# Функция отправки и ОЧИСТКИ старых стикеров
 async def send_status_sticker(chat_id: int, color: str):
     sticker_id = STICKERS.get(color)
-    if sticker_id and not sticker_id.startswith("CAACAgIAAxkBAAE..."):
+    if not sticker_id or sticker_id.startswith("CAACAgIAAxkBAAE..."):
+        return
+
+    # Удаляем предыдущий стикер, если он был
+    old_sticker_id = sticker_messages.get(chat_id)
+    if old_sticker_id:
         try:
-            await bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
-        except Exception as e:
-            logger.error(f"⚠️ Не удалось отправить стикер: {e}")
+            await bot.delete_message(chat_id=chat_id, message_id=old_sticker_id)
+        except Exception:
+            pass
+
+    # Отправляем новый стикер и запоминаем его ID
+    try:
+        sent_sticker = await bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
+        sticker_messages[chat_id] = sent_sticker.message_id
+    except Exception as e:
+        logger.error(f"⚠️ Не удалось отправить стикер: {e}")
 
 async def update_girl_photo(chat_id: int, color: str) -> bool:
     lock = await get_lock(chat_id)
@@ -133,10 +147,10 @@ async def update_girl_photo(chat_id: int, color: str) -> bool:
         caption = TEXTS[color]
         kb = get_keyboard()
 
-        # 1. Отправляем стикер
+        # 1. Удаляем старый стикер и отправляем новый
         await send_status_sticker(chat_id, color)
 
-        # 2. Редактируем старое сообщение или отправляем новое
+        # 2. Обновляем фото или отправляем заново
         if msg_id:
             try:
                 await bot.edit_message_media(
@@ -204,14 +218,11 @@ async def request_status_from_girl(event: types.Message | types.CallbackQuery):
         return
 
     try:
-        # Получаем текущий цвет девочки (или зеленый по умолчанию)
         curr_color = current_status.get(girl_chat_id, "green")
         photo = make_circle(curr_color)
-        
-        # Случайная язвительная подпись к карточке
         ask_caption = random.choice(ASK_MESSAGES)
 
-        # Удаляем старое карточное сообщение, если оно было
+        # 1. Удаляем старое фото с кнопками
         old_msg_id = status_messages.get(girl_chat_id)
         if old_msg_id:
             try:
@@ -219,7 +230,15 @@ async def request_status_from_girl(event: types.Message | types.CallbackQuery):
             except Exception:
                 pass
 
-        # Отправляем новое свежее фото С КНОПКАМИ прямо вниз чата
+        # 2. Удаляем старый стикер
+        old_sticker_id = sticker_messages.get(girl_chat_id)
+        if old_sticker_id:
+            try:
+                await bot.delete_message(chat_id=girl_chat_id, message_id=old_sticker_id)
+            except Exception:
+                pass
+
+        # 3. Отправляем карточку вниз чата
         sent = await bot.send_photo(
             chat_id=girl_chat_id,
             photo=photo,
@@ -227,7 +246,6 @@ async def request_status_from_girl(event: types.Message | types.CallbackQuery):
             parse_mode="Markdown",
             reply_markup=get_keyboard()
         )
-        # Запоминаем новый ID сообщения
         status_messages[girl_chat_id] = sent.message_id
         
         text_ok = "📩 Запрос отправлен! Ждём ответа..."
