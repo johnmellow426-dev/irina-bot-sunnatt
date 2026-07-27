@@ -18,7 +18,7 @@ dp = Dispatcher()
 
 # Хранилище состояний
 status_messages = {}   # {chat_id: message_id} — для фото с кнопками
-sticker_messages = {}  # {chat_id: message_id} — NEW: для стикеров (чтобы удалять)
+sticker_messages = {}  # {chat_id: [msg_id1, msg_id2, ...]} — СПИСОК всех стикеров
 current_status = {}    # {chat_id: color}
 boy_chat_id = None
 girl_chat_id = None    # Запоминаем ID девушки
@@ -32,10 +32,10 @@ COLORS = {
 }
 
 TEXTS = {
-    "green": "🟢 Будем, за нас, хочу ИнНОмарку",
-    "yellow": "🟡 не знаю, нИчеВо",
-    "orange": "🟠все не то, ой все, хочу к лексуууу",
-    "red": "🔴 код красныый, код красссный.!"
+    "green": "🟢",
+    "yellow": "🟡",
+    "orange": "🟠",
+    "red": "🔴"
 }
 
 STICKERS = {
@@ -45,7 +45,6 @@ STICKERS = {
     "red": "CAACAgIAAxkBAAERnMVqZyWolmr7j5Y01teSGFx7knW-IQADFQACrAGQS5_oTC2UZF6iPQQ"     
 }
 
-# Язвительные фразы-уведомления для девушки
 ASK_MESSAGES = [
     "🔔 *ЗАйка милашка!* Не моглабы выбрать статус👇",
     "😏 *Твой хочет контакта, хочет кнш полового!* но не получится, поэтому выбери статус для разговора👇",
@@ -113,44 +112,57 @@ async def get_lock(chat_id: int):
         chat_locks[chat_id] = asyncio.Lock()
     return chat_locks[chat_id]
 
-# Функция отправки и ОЧИСТКИ старых стикеров
+# ВЫЧИЩАЕМ ВСЕ СТИКЕРЫ ИЗ СПИСКА
+async def clear_all_stickers(chat_id: int):
+    stickers_list = sticker_messages.get(chat_id, [])
+    if not stickers_list:
+        return
+
+    for msg_id in list(stickers_list):
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            logger.info(f"🗑 Успешно удален стикер {msg_id}")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось удалить стикер {msg_id}: {e}")
+            
+    # Обнуляем список после очистки
+    sticker_messages[chat_id] = []
+
+# Функция отправки нового стикера
 async def send_status_sticker(chat_id: int, color: str):
     sticker_id = STICKERS.get(color)
     if not sticker_id or sticker_id.startswith("CAACAgIAAxkBAAE..."):
         return
 
-    # Удаляем предыдущий стикер, если он был
-    old_sticker_id = sticker_messages.get(chat_id)
-    if old_sticker_id:
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=old_sticker_id)
-        except Exception:
-            pass
+    # 1. Удаляем абсолютно все накопившиеся стикеры
+    await clear_all_stickers(chat_id)
 
-    # Отправляем новый стикер и запоминаем его ID
+    # 2. Отправляем новый и добавляем его в список
     try:
         sent_sticker = await bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
-        sticker_messages[chat_id] = sent_sticker.message_id
+        if chat_id not in sticker_messages:
+            sticker_messages[chat_id] = []
+        sticker_messages[chat_id].append(sent_sticker.message_id)
     except Exception as e:
-        logger.error(f"⚠️ Не удалось отправить стикер: {e}")
+        logger.error(f"❌ Ошибка отправки стикера: {e}")
 
 async def update_girl_photo(chat_id: int, color: str) -> bool:
     lock = await get_lock(chat_id)
     
     async with lock:
-        if current_status.get(chat_id) == color:
-            logger.info(f"ℹ️ Статус для {chat_id} уже {color}, игнорируем повторное нажатие.")
-            return False
+        is_same_color = (current_status.get(chat_id) == color)
+        
+        # Обновляем/переотправляем стикер
+        await send_status_sticker(chat_id, color)
+
+        if is_same_color:
+            return True
             
         msg_id = status_messages.get(chat_id)
         photo = make_circle(color)
         caption = TEXTS[color]
         kb = get_keyboard()
 
-        # 1. Удаляем старый стикер и отправляем новый
-        await send_status_sticker(chat_id, color)
-
-        # 2. Обновляем фото или отправляем заново
         if msg_id:
             try:
                 await bot.edit_message_media(
@@ -162,11 +174,6 @@ async def update_girl_photo(chat_id: int, color: str) -> bool:
                 current_status[chat_id] = color
                 return True
             except Exception as e:
-                err_str = str(e).lower()
-                if "not modified" in err_str:
-                    current_status[chat_id] = color
-                    return True
-                
                 logger.warning(f"⚠️ Редактирование не удалось ({e}). Пробую отправить заново.")
 
         try:
@@ -179,10 +186,9 @@ async def update_girl_photo(chat_id: int, color: str) -> bool:
             )
             status_messages[chat_id] = sent.message_id
             current_status[chat_id] = color
-            logger.info(f"📤 Отправлено новое фото (msg_id: {sent.message_id}) для {chat_id}")
             return True
         except Exception as e:
-            logger.error(f"❌ Критическая ошибка отправки фото: {e}")
+            logger.error(f"❌ Ошибка отправки карточки: {e}")
             return False
 
 # --- ХЕНДЛЕРЫ ПАРНЯ ---
@@ -222,19 +228,14 @@ async def request_status_from_girl(event: types.Message | types.CallbackQuery):
         photo = make_circle(curr_color)
         ask_caption = random.choice(ASK_MESSAGES)
 
-        # 1. Удаляем старое фото с кнопками
+        # 1. Очищаем все стикеры
+        await clear_all_stickers(girl_chat_id)
+
+        # 2. Удаляем старую карточку
         old_msg_id = status_messages.get(girl_chat_id)
         if old_msg_id:
             try:
                 await bot.delete_message(chat_id=girl_chat_id, message_id=old_msg_id)
-            except Exception:
-                pass
-
-        # 2. Удаляем старый стикер
-        old_sticker_id = sticker_messages.get(girl_chat_id)
-        if old_sticker_id:
-            try:
-                await bot.delete_message(chat_id=girl_chat_id, message_id=old_sticker_id)
             except Exception:
                 pass
 
@@ -256,7 +257,7 @@ async def request_status_from_girl(event: types.Message | types.CallbackQuery):
             await event.answer(text_ok)
             
     except Exception as e:
-        logger.error(f"❌ Не удалось отправить запрос девушке: {e}")
+        logger.error(f"❌ Ошибка запроса статуса: {e}")
         err_msg = "❌ Ошибка при отправке запроса."
         if isinstance(event, types.CallbackQuery):
             await event.answer(err_msg, show_alert=True)
@@ -283,7 +284,6 @@ async def on_color_change(callback: types.CallbackQuery):
         try:
             comment = random.choice(COMMENTS[color])
             await bot.send_message(chat_id=boy_chat_id, text=comment)
-            logger.info(f"📩 Отправлен комментарий парню: {comment}")
         except Exception as e:
             logger.error(f"❌ Не удалось отправить сообщение парню: {e}")
 
