@@ -31,11 +31,27 @@ COLORS = {
 }
 
 TEXTS = {
-    "green": "💚 Готова общаться",
-    "yellow": "🤔 Можно...",
-    "orange": "😤 Раздражаюсь...",
-    "red": "🔴 Обиделась!"
+    "green": "🟢 Будем, за нас, хочу ИнНОмарку",
+    "yellow": "🟡 не знаю, нИчеВо",
+    "orange": "🟠все не то, ой все, хочу к лексуууу",
+    "red": "🔴 код красныый, код красссный.!"
 }
+
+STICKERS = {
+    "green": "CAACAgIAAxkBAAERnNBqZyX-PHFYtWZjowm5KAwrarpL5gACHxEAAs63mEs-6jDBRqMUBD0E",   
+    "yellow": "CAACAgIAAxkBAAERnM5qZyXrwE01LQReexVHgAO_mTAoBwACnxIAAgKvmUsyx0PpsZAfRD0E",  
+    "orange": "CAACAgIAAxkBAAERnMdqZyXRYjAmr-vdRz5YzSlOEG_PvwACvwADY-ZrLhY3j8AZLr2OPQQ",  
+    "red": "CAACAgIAAxkBAAERnMVqZyWolmr7j5Y01teSGFx7knW-IQADFQACrAGQS5_oTC2UZF6iPQQ"     
+}
+
+# Язвительные фразы-уведомления для девушки, когда парень запрашивает статус
+ASK_MESSAGES = [
+    "🔔 *ЗАйка милашка!* Не моглабы выбрать статус👇",
+    "😏 *Твой хочет контакта, хочет кнш полового!* но не получится, поэтому выбери статус для разговора👇",
+    "👑 *Ваша милейничесвто* Вы могли бы выбрать КНОПОЧКИ ПЛИЗ?",
+    "🚨 *Прилетел запрос на проверку обстановки!* Подате сигнал светофора 👇",
+    "👀 *Парень дёргается и хочет внимания.* Обнови  статус, не томи!"
+]
 
 COMMENTS = {
     "green": [
@@ -96,6 +112,14 @@ async def get_lock(chat_id: int):
         chat_locks[chat_id] = asyncio.Lock()
     return chat_locks[chat_id]
 
+async def send_status_sticker(chat_id: int, color: str):
+    sticker_id = STICKERS.get(color)
+    if sticker_id and not sticker_id.startswith("CAACAgIAAxkBAAE..."):
+        try:
+            await bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
+        except Exception as e:
+            logger.error(f"⚠️ Не удалось отправить стикер: {e}")
+
 async def update_girl_photo(chat_id: int, color: str) -> bool:
     lock = await get_lock(chat_id)
     
@@ -109,6 +133,10 @@ async def update_girl_photo(chat_id: int, color: str) -> bool:
         caption = TEXTS[color]
         kb = get_keyboard()
 
+        # 1. Отправляем стикер
+        await send_status_sticker(chat_id, color)
+
+        # 2. Редактируем старое сообщение или отправляем новое
         if msg_id:
             try:
                 await bot.edit_message_media(
@@ -125,11 +153,7 @@ async def update_girl_photo(chat_id: int, color: str) -> bool:
                     current_status[chat_id] = color
                     return True
                 
-                logger.warning(f"⚠️ Редактирование не удалось ({e}). Пробую удалить и отправить заново.")
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-                except Exception:
-                    pass
+                logger.warning(f"⚠️ Редактирование не удалось ({e}). Пробую отправить заново.")
 
         try:
             photo = make_circle(color)
@@ -180,10 +204,31 @@ async def request_status_from_girl(event: types.Message | types.CallbackQuery):
         return
 
     try:
-        await bot.send_message(
-            chat_id=girl_chat_id, 
-            text="🔔 **Он спрашивает, какое у тебя настроение!**\nВыбери текущий статус выше 👆"
+        # Получаем текущий цвет девочки (или зеленый по умолчанию)
+        curr_color = current_status.get(girl_chat_id, "green")
+        photo = make_circle(curr_color)
+        
+        # Случайная язвительная подпись к карточке
+        ask_caption = random.choice(ASK_MESSAGES)
+
+        # Удаляем старое карточное сообщение, если оно было
+        old_msg_id = status_messages.get(girl_chat_id)
+        if old_msg_id:
+            try:
+                await bot.delete_message(chat_id=girl_chat_id, message_id=old_msg_id)
+            except Exception:
+                pass
+
+        # Отправляем новое свежее фото С КНОПКАМИ прямо вниз чата
+        sent = await bot.send_photo(
+            chat_id=girl_chat_id,
+            photo=photo,
+            caption=ask_caption,
+            parse_mode="Markdown",
+            reply_markup=get_keyboard()
         )
+        # Запоминаем новый ID сообщения
+        status_messages[girl_chat_id] = sent.message_id
         
         text_ok = "📩 Запрос отправлен! Ждём ответа..."
         if isinstance(event, types.CallbackQuery):
